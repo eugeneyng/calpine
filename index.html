@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <script src="https://unpkg.com/alpinejs" defer></script>
+    <script src="https://unpkg.com/dav"></script>
+    <script src="https://unpkg.com/fullcalendar"></script>
+
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/5.11.3/main.min.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/skeleton/2.0.4/skeleton.css"
+    />
+  </head>
+
+  <body>
+    <div class="container u-full-width" x-data>
+      <header>
+        <div class="row">
+          <div class="ten columns">
+            <h4>Calendar</h4>
+          </div>
+          <div class="two columns">
+            <button
+              class="button"
+              x-on:click="$store.app.toggleAuth()"
+              x-show="$store.app.isAuthenticated"
+            >
+              Log Out
+            </button>
+          </div>
+        </div>
+      </header>
+      <div
+        id="calendar"
+        x-cloak
+        x-data="calendarComponent"
+        x-show="$store.app.isAuthenticated"
+      ></div>
+      <div id="authForm" x-cloak x-show="!$store.app.isAuthenticated">
+        <div class="row">
+          <div>
+            <label for="server-url">Server URL</label>
+            <input
+              class="u-full-width"
+              id="server-url"
+              placeholder="https://caldav.example.com/dav/"
+              type="text"
+              x-model="$store.app.serverUrl"
+            />
+          </div>
+          <div>
+            <label for="User">User</label>
+            <input
+              class="u-full-width"
+              id="user"
+              placeholder="username"
+              type="text"
+              x-model="$store.app.username"
+            />
+          </div>
+          <div>
+            <label for="password">Password</label>
+            <input
+              class="u-full-width"
+              id="password"
+              type="password"
+              x-model="$store.app.password"
+            />
+          </div>
+          <div class="form-footer">
+            <button class="button-primary" x-on:click="$store.app.toggleAuth()">
+              Connect
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="loading" x-show="$store.app.loading">
+        <p>Loading...</p>
+      </div>
+    </div>
+
+    <script>
+      const calendarComponent = {
+        calendarInstance: null,
+
+        init() {
+          this.$watch("$store.app.isAuthenticated", (value) => {
+            if (value) {
+              this.initCalendar()
+            } else if (this.calendarInstance) {
+              this.calendarInstance.destroy()
+              this.calendarInstance = null
+            }
+          })
+        },
+
+        initCalendar() {
+          setTimeout(() => {
+            const calendarElement = document.getElementById("calendar")
+            this.calendarInstance = new FullCalendar.Calendar(calendarElement, {
+              initialView: "dayGridMonth",
+              headerToolbar: {
+                left: "prev,next today",
+                center: "title",
+                right: "dayGridMonth,timeGridWeek,timeGridDay",
+              },
+              events: this.$store.app.events,
+            })
+            this.calendarInstance.render()
+          }, 100)
+          console.log("FullCalendar initialized.")
+        },
+      }
+
+      document.addEventListener("alpine:init", () => {
+        console.log("Alpine initialized.")
+        Alpine.store("app", {
+          calendarInstance: null,
+          calendars: [],
+          darkMode: false,
+          davClient: null,
+          events: [],
+          isAuthenticated: false,
+          loading: false,
+          password: "",
+          serverUrl: "",
+          username: "",
+
+          toggleAuth() {
+            this.loading = true
+            if (this.isAuthenticated) {
+              // log out
+              localStorage.clear()
+            } else {
+              // log in
+              localStorage.clear()
+            }
+            this.isAuthenticated = !this.isAuthenticated
+            this.loading = false
+          },
+        })
+      })
+    </script>
+  </body>
+</html>
