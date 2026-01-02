@@ -1,5 +1,5 @@
 {
-  "name": "Homa",
+  "name": "vue",
   "image": "mcr.microsoft.com/devcontainers/javascript-node",
   
   "postCreateCommand": "npm install",
@@ -12,7 +12,5 @@
       ]
     }
   },
-  
-  "appPort": ["5173:5173"],
   "forwardPorts": [5173]
 }
