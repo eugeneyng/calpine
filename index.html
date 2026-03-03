@@ -1,13 +1,111 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
   <head>
-    <meta charset="UTF-8">
-    <link rel="icon" href="/favicon.ico">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dwelling</title>
+    <meta charset="utf-8" />
+    <title>CalDAV Calendar</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 40px;
+      }
+
+      #calendar {
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+    </style>
   </head>
+
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <h1>CalDAV Calendar Interface</h1>
+    <div id="calendar"></div>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        var calendarEl = document.getElementById("calendar");
+        var calendar = new FullCalendar.Calendar(calendarEl, {
+          initialView: "dayGridMonth",
+          headerToolbar: {
+            left: "prev,next today",
+            center: "title",
+            right: "dayGridMonth,timeGridWeek,timeGridDay",
+          },
+          editable: true,
+          selectable: true,
+          // Fetch events from Flask backend
+          events: function (info, successCallback, failureCallback) {
+            fetch(`/api/events?start=${info.startStr}&end=${info.endStr}`)
+              .then((response) => response.json())
+              .then((data) => successCallback(data))
+              .catch((error) => {
+                console.error("Error fetching events:", error);
+                failureCallback(error);
+              });
+          },
+          // Create new event on date select
+          select: function (info) {
+            var title = prompt("Event Title:");
+            if (title) {
+              fetch("/api/events", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  title: title,
+                  start: info.startStr,
+                  end: info.endStr,
+                  id: Date.now().toString(),
+                }),
+              })
+                .then((response) => response.json())
+                .then((data) => {
+                  calendar.refetchEvents();
+                })
+                .catch((error) =>
+                  console.error("Error creating event:", error),
+                );
+            }
+          },
+          // Update event on drag/resize
+          eventChange: function (info) {
+            fetch(`/api/events/${info.event.id}`, {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                title: info.event.title,
+                start: info.event.startStr,
+                end: info.event.endStr,
+              }),
+            }).catch((error) => {
+              console.error("Error updating event:", error);
+              info.revert();
+            });
+          },
+          // Delete event on click
+          eventClick: function (info) {
+            if (confirm(`Delete event '${info.event.title}'?`)) {
+              fetch(`/api/events/${info.event.id}`, {
+                method: "DELETE",
+              })
+                .then(() => {
+                  info.event.remove();
+                })
+                .catch((error) =>
+                  console.error("Error deleting event:", error),
+                );
+            }
+          },
+        });
+        calendar.render();
+      });
+    </script>
   </body>
 </html>
