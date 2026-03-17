@@ -1,4 +1,4 @@
-## Homa is an open source home management system
+## calpine
 [Version 0.1.0](https://semver.org/)
 
 ## Table of contents
@@ -14,7 +14,7 @@
 
 ## Introduction
 
-Homa is an open-source web application that enables you to organize, track, and log your home interactions. 
+calpine is an open source front end for CalDAV
 
 ### Features
 
