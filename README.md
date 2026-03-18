@@ -1,6 +1,12 @@
 ## calpine
 [Version 0.1.0](https://semver.org/)
 
+[![Contributors][contributors-shield]][contributors-url]
+[![Forks][forks-shield]][forks-url]
+[![Stargazers][stars-shield]][stars-url]
+[![Issues][issues-shield]][issues-url]
+[![project_license][license-shield]][license-url]
+
 ## Table of contents
 
 - [Introduction](#introduction)
@@ -14,19 +20,9 @@
 
 ## Introduction
 
-calpine is an open source front end for CalDAV
+calpine is an open source front end for CalDAV. It's intended to interface with [Radicale](https://radicale.org) and [Baikal](https://sabre.io/baikal/). It was made because I didn't find there to be any good front-ends to the CalDAV servers.
 
 ### Features
-
-- Property Details
-  - Property Finances
-- Inventory Management
-  - Document (Receipts/Manuals) and Photo Storage
-  - Purchase Date and Value
-- Maintenance and Task Management
-  - Calendar
-  - Recurring Tasks
-- Vendor Management
 
 ## Contribute
 
@@ -36,9 +32,9 @@ Here are some of the things you can do to help.
 
 ### Contribute as a community
 
-- Unlike Fight Club, the best way to help is **to actually talk about Homa** as much as you can in blog posts and articles, or on social media.
-- You can answer questions in [the issue tracker](https://github.com/eugeneyng/homa/issues) to help other community members.
-- You can financially support Homa’s development [on Ko-Fi](https://ko-fi.com/eugeneng) or by subscribing to [a paid account]() (coming soon).
+- Unlike Fight Club, the best way to help is **to actually talk about calpine** as much as you can in blog posts and articles, or on social media.
+- You can answer questions in [the issue tracker](https://github.com/eugeneyng/calpine/issues) to help other community members.
+- You can financially support calpine’s development [on Ko-Fi](https://ko-fi.com/eugeneng) or by subscribing to [a paid account]() (coming soon).
 
 ### Contribute as a developer
 
@@ -56,3 +52,22 @@ You can support the development of Homa [on Ko-Fi](https://ko-fi.com/eugeneng). 
 ## Contact
 
 - [Eugene](https://github.com/eugeneyng)
+
+<!-- MARKDOWN LINKS & IMAGES -->
+<!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
+[contributors-shield]: https://img.shields.io/github/contributors/eugeneyng/alpen.svg
+[contributors-url]: https://github.com/eugeneyng/alpen/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/eugeneyng/alpen.svg
+[forks-url]: https://github.com/eugeneyng/alpen/network/members
+[stars-shield]: https://img.shields.io/github/stars/eugeneyng/alpen.svg
+[stars-url]: https://github.com/eugeneyng/alpen/stargazers
+[issues-shield]: https://img.shields.io/github/issues/eugeneyng/alpen.svg
+[issues-url]: https://github.com/eugeneyng/alpen/issues
+[license-shield]: https://img.shields.io/github/license/eugeneyng/alpen.svg
+[license-url]: https://github.com/eugeneyng/alpen/blob/master/LICENSE
+<!-- Shields.io badges. You can a comprehensive list with many more badges at: https://github.com/inttter/md-badges -->
+[Alpine.js]: https://img.shields.io/badge/Alpine.js-8BC0D0?logo=alpinedotjs&logoColor=fff
+[Alpine-url]: https://alpinejs.dev/
+[Docker]: https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=fff
+[Docker-url]: https://docker.com/
+[Git-url]: https://git-scm.com/
