@@ -1,148 +1,135 @@
-from flask import Flask, render_template, request, jsonify
+import logging
+import os
+from datetime import date, datetime, timezone
+from urllib.parse import urlparse
+from uuid import uuid4
+
 import caldav
-from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from flask import Flask, jsonify, request, send_from_directory
 from icalendar import Calendar, Event
-import pytz
 
+load_dotenv()
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# CalDAV configuration
-CALDAV_URL = "http://localhost:5232/"  # Radicale default
-CALDAV_USERNAME = "your_username"
-CALDAV_PASSWORD = "your_password"
+CALDAV_URL = os.getenv("CALDAV_URL") or "http://localhost:5232/"
+CALDAV_USERNAME = os.getenv("CALDAV_USERNAME") or ""
+CALDAV_PASSWORD = os.getenv("CALDAV_PASSWORD") or ""
 
-def get_caldav_client():
+if not urlparse(CALDAV_URL).scheme or not urlparse(CALDAV_URL).netloc:
+    raise RuntimeError("CALDAV_URL must include a scheme and host, e.g. http://localhost:5232/")
+
+
+def calendar():
     client = caldav.DAVClient(
         url=CALDAV_URL,
         username=CALDAV_USERNAME,
-        password=CALDAV_PASSWORD
+        password=CALDAV_PASSWORD,
     )
-    return client
+    calendars = client.principal().calendars()
+    if not calendars:
+        raise RuntimeError("No CalDAV calendar found")
+    return calendars[0]
 
-def get_calendar():
-    client = get_caldav_client()
-    principal = client.principal()
-    calendars = principal.calendars()
-    # Return first calendar or modify to select specific one
-    return calendars[0] if calendars else None
 
-@app.route('/')
+def parse_date(value):
+    value = value.replace("Z", "+00:00")
+    return date.fromisoformat(value) if "T" not in value else datetime.fromisoformat(value)
+
+
+def find_event(cal, event_id):
+    for resource in cal.events():
+        ical = Calendar.from_ical(resource.data)
+        if any(str(item.get("UID")) == event_id for item in ical.walk("VEVENT")):
+            return resource, ical
+    return None, None
+
+
+def event_json(component):
+    start = component.decoded("DTSTART")
+    end = component.decoded("DTEND") if component.get("DTEND") else None
+    return {
+        "id": str(component.get("UID")),
+        "title": str(component.get("SUMMARY", "")),
+        "start": start.isoformat(),
+        "end": end.isoformat() if end else None,
+        "allDay": isinstance(start, date) and not isinstance(start, datetime),
+    }
+
+
+@app.get("/")
 def index():
-    return render_template('calendar.html')
+    return send_from_directory(app.root_path, "index.html")
 
-@app.route('/api/events', methods=['GET'])
+
+@app.get("/api/events")
 def get_events():
-    """Fetch events from CalDAV server"""
     try:
-        calendar = get_calendar()
-        if not calendar:
-            return jsonify([])
+        start = parse_date(request.args["start"])
+        end = parse_date(request.args["end"])
+        result = []
+        for resource in calendar().search(start=start, end=end, event=True, expand=True):
+            ical = Calendar.from_ical(resource.data)
+            result.extend(event_json(item) for item in ical.walk("VEVENT"))
+        return jsonify(result)
+    except Exception as error:
+        logger.exception("Could not load events")
+        return jsonify(error=str(error)), 500
 
-        # Get date range from FullCalendar
-        start = request.args.get('start')
-        end = request.args.get('end')
 
-        start_date = datetime.fromisoformat(start.replace('Z', '+00:00'))
-        end_date = datetime.fromisoformat(end.replace('Z', '+00:00'))
-
-        # Fetch events from CalDAV
-        events = calendar.date_search(start=start_date, end=end_date, expand=True)
-
-        fullcalendar_events = []
-        for event in events:
-            ical = Calendar.from_ical(event.data)
-            for component in ical.walk('VEVENT'):
-                fullcalendar_events.append({
-                    'id': str(component.get('UID')),
-                    'title': str(component.get('SUMMARY', 'No Title')),
-                    'start': component.get('DTSTART').dt.isoformat(),
-                    'end': component.get('DTEND').dt.isoformat() if component.get('DTEND') else None,
-                    'allDay': not isinstance(component.get('DTSTART').dt, datetime),
-                    'url': event.url
-                })
-
-        return jsonify(fullcalendar_events)
-
-    except Exception as e:
-        print(f"Error fetching events: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/events', methods=['POST'])
+@app.post("/api/events")
 def create_event():
-    """Create new event on CalDAV server"""
     try:
-        data = request.json
-        calendar = get_calendar()
-
+        data = request.json or {}
+        item = Event()
+        item.add("UID", data.get("id") or str(uuid4()))
+        item.add("SUMMARY", data["title"])
+        item.add("DTSTART", parse_date(data["start"]))
+        if data.get("end"):
+            item.add("DTEND", parse_date(data["end"]))
+        item.add("DTSTAMP", datetime.now(timezone.utc))
         cal = Calendar()
-        event = Event()
+        cal.add_component(item)
+        calendar().save_event(cal.to_ical())
+        return jsonify(event_json(item)), 201
+    except Exception as error:
+        return jsonify(error=str(error)), 500
 
-        event.add('summary', data['title'])
-        event.add('dtstart', datetime.fromisoformat(data['start'].replace('Z', '+00:00')))
 
-        if data.get('end'):
-            event.add('dtend', datetime.fromisoformat(data['end'].replace('Z', '+00:00')))
-
-        event.add('uid', data.get('id', str(datetime.now().timestamp())))
-        event.add('dtstamp', datetime.now(pytz.UTC))
-
-        cal.add_component(event)
-
-        calendar.save_event(cal.to_ical())
-
-        return jsonify({'status': 'success'}), 201
-
-    except Exception as e:
-        print(f"Error creating event: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/events/<event_id>', methods=['PUT'])
+@app.put("/api/events/<event_id>")
 def update_event(event_id):
-    """Update existing event"""
     try:
-        data = request.json
-        calendar = get_calendar()
+        data = request.json or {}
+        resource, cal = find_event(calendar(), event_id)
+        if not resource:
+            return jsonify(error="Event not found"), 404
+        item = next(item for item in cal.walk("VEVENT") if str(item.get("UID")) == event_id)
+        item["SUMMARY"] = data["title"]
+        item["DTSTART"] = parse_date(data["start"])
+        if data.get("end"):
+            item["DTEND"] = parse_date(data["end"])
+        elif "DTEND" in item:
+            del item["DTEND"]
+        resource.data = cal.to_ical()
+        resource.save()
+        return jsonify(event_json(item))
+    except Exception as error:
+        return jsonify(error=str(error)), 500
 
-        # Find and update the event
-        events = calendar.events()
-        for event in events:
-            ical = Calendar.from_ical(event.data)
-            for component in ical.walk('VEVENT'):
-                if str(component.get('UID')) == event_id:
-                    component['SUMMARY'] = data['title']
-                    component['DTSTART'].dt = datetime.fromisoformat(data['start'].replace('Z', '+00:00'))
-                    if data.get('end'):
-                        component['DTEND'].dt = datetime.fromisoformat(data['end'].replace('Z', '+00:00'))
 
-                    event.data = ical.to_ical()
-                    event.save()
-                    return jsonify({'status': 'success'})
-
-        return jsonify({'error': 'Event not found'}), 404
-
-    except Exception as e:
-        print(f"Error updating event: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/events/<event_id>', methods=['DELETE'])
+@app.delete("/api/events/<event_id>")
 def delete_event(event_id):
-    """Delete event from CalDAV server"""
     try:
-        calendar = get_calendar()
-        events = calendar.events()
+        resource, _ = find_event(calendar(), event_id)
+        if not resource:
+            return jsonify(error="Event not found"), 404
+        resource.delete()
+        return jsonify(status="success")
+    except Exception as error:
+        return jsonify(error=str(error)), 500
 
-        for event in events:
-            ical = Calendar.from_ical(event.data)
-            for component in ical.walk('VEVENT'):
-                if str(component.get('UID')) == event_id:
-                    event.delete()
-                    return jsonify({'status': 'success'})
 
-        return jsonify({'error': 'Event not found'}), 404
-
-    except Exception as e:
-        print(f"Error deleting event: {e}")
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    app.run(debug=os.getenv("FLASK_DEBUG") == "1", port=5000)
