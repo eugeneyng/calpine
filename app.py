@@ -39,24 +39,73 @@ def parse_date(value):
     return date.fromisoformat(value) if "T" not in value else datetime.fromisoformat(value)
 
 
-def find_event(cal, event_id):
+def uid(component):
+    return str(component.get("UID"))
+
+
+def recurrence_id(component):
+    value = component.get("RECURRENCE-ID")
+    return value.dt.isoformat() if value else None
+
+
+def event_id(component):
+    return uid(component) + (f"|{recurrence_id(component)}" if recurrence_id(component) else "")
+
+
+def find_series(cal, event_id):
+    series_id = event_id.split("|", 1)[0]
     for resource in cal.events():
         ical = Calendar.from_ical(resource.data)
-        if any(str(item.get("UID")) == event_id for item in ical.walk("VEVENT")):
-            return resource, ical
-    return None, None
+        if any(uid(item) == series_id and not item.get("RECURRENCE-ID") for item in ical.walk("VEVENT")):
+            return resource, ical, series_id
+    return None, None, series_id
+
+
+def find_component(ical, event_id):
+    series_id, _, instance = event_id.partition("|")
+    for item in ical.walk("VEVENT"):
+        if uid(item) == series_id and ((not instance and not item.get("RECURRENCE-ID")) or recurrence_id(item) == instance):
+            return item
+    return None
 
 
 def event_json(component):
     start = component.decoded("DTSTART")
     end = component.decoded("DTEND") if component.get("DTEND") else None
+    rule = component.get("RRULE")
+    frequency = str(rule.get("FREQ", "none")).lower() if rule else "none"
+    until = rule.get("UNTIL") if rule else None
+    until = until.isoformat()[:10] if until else ""
+    recurring = bool(rule or component.get("RECURRENCE-ID"))
     return {
-        "id": str(component.get("UID")),
+        "id": event_id(component),
+        "seriesId": uid(component),
+        "recurrenceId": recurrence_id(component),
+        "recurring": recurring,
+        "frequency": frequency,
+        "until": until,
         "title": str(component.get("SUMMARY", "")),
         "start": start.isoformat(),
         "end": end.isoformat() if end else None,
         "allDay": isinstance(start, date) and not isinstance(start, datetime),
     }
+
+
+def add_recurrence(item, frequency, until):
+    if frequency and frequency != "none":
+        rule = {"FREQ": frequency.upper()}
+        if until:
+            rule["UNTIL"] = parse_date(until)
+        item.add("RRULE", rule)
+
+
+def update_values(item, data):
+    item["SUMMARY"] = data["title"]
+    item["DTSTART"] = parse_date(data["start"])
+    if data.get("end"):
+        item["DTEND"] = parse_date(data["end"])
+    elif "DTEND" in item:
+        del item["DTEND"]
 
 
 @app.get("/")
@@ -70,7 +119,7 @@ def get_events():
         start = parse_date(request.args["start"])
         end = parse_date(request.args["end"])
         result = []
-        for resource in calendar().search(start=start, end=end, event=True, expand=True):
+        for resource in calendar().search(start=start, end=end, event=True, expand=True, split_expanded=True):
             ical = Calendar.from_ical(resource.data)
             result.extend(event_json(item) for item in ical.walk("VEVENT"))
         return jsonify(result)
@@ -89,6 +138,7 @@ def create_event():
         item.add("DTSTART", parse_date(data["start"]))
         if data.get("end"):
             item.add("DTEND", parse_date(data["end"]))
+        add_recurrence(item, data.get("frequency"), data.get("until"))
         item.add("DTSTAMP", datetime.now(timezone.utc))
         cal = Calendar()
         cal.add_component(item)
@@ -98,36 +148,60 @@ def create_event():
         return jsonify(error=str(error)), 500
 
 
-@app.put("/api/events/<event_id>")
+@app.put("/api/events/<path:event_id>")
 def update_event(event_id):
     try:
         data = request.json or {}
-        resource, cal = find_event(calendar(), event_id)
+        resource, cal, series_id = find_series(calendar(), event_id)
         if not resource:
             return jsonify(error="Event not found"), 404
-        item = next(item for item in cal.walk("VEVENT") if str(item.get("UID")) == event_id)
-        item["SUMMARY"] = data["title"]
-        item["DTSTART"] = parse_date(data["start"])
-        if data.get("end"):
-            item["DTEND"] = parse_date(data["end"])
-        elif "DTEND" in item:
-            del item["DTEND"]
+        target = find_component(cal, event_id)
+        scope = data.get("scope", "series")
+        if "|" in event_id and scope == "occurrence":
+            if target is None:
+                target = Event()
+                target.add("UID", series_id)
+                target.add("RECURRENCE-ID", parse_date(data["recurrenceId"]))
+                cal.add_component(target)
+            update_values(target, data)
+        else:
+            target = find_component(cal, series_id)
+            update_values(target, data)
+            if "frequency" in data:
+                if "RRULE" in target:
+                    del target["RRULE"]
+                add_recurrence(target, data.get("frequency"), data.get("until"))
         resource.data = cal.to_ical()
         resource.save()
-        return jsonify(event_json(item))
+        return jsonify(event_json(target))
     except Exception as error:
+        logger.exception("Could not update event")
         return jsonify(error=str(error)), 500
 
 
-@app.delete("/api/events/<event_id>")
+@app.delete("/api/events/<path:event_id>")
 def delete_event(event_id):
     try:
-        resource, _ = find_event(calendar(), event_id)
+        resource, cal, series_id = find_series(calendar(), event_id)
         if not resource:
             return jsonify(error="Event not found"), 404
-        resource.delete()
+        scope = request.args.get("scope", "series")
+        if "|" in event_id and scope == "occurrence":
+            target = find_component(cal, event_id)
+            if target and target.get("RECURRENCE-ID"):
+                cal.subcomponents.remove(target)
+            else:
+                master = find_component(cal, series_id)
+                value = parse_date(event_id.split("|", 1)[1])
+                master.add("EXDATE", value)
+        else:
+            resource.delete()
+            return jsonify(status="success")
+        resource.data = cal.to_ical()
+        resource.save()
         return jsonify(status="success")
     except Exception as error:
+        logger.exception("Could not delete event")
         return jsonify(error=str(error)), 500
 
 
