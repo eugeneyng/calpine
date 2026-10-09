@@ -1,0 +1,12 @@
+services:
+  calpine:
+    build: .
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-UTC}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "5000:5000"
+    restart: unless-stopped

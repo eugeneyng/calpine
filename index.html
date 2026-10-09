@@ -5,7 +5,10 @@
     <title>CalDAV Calendar</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.30.1/min/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment-timezone@0.5.43/builds/moment-timezone-with-data.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@fullcalendar/moment-timezone@6.1.10/index.global.min.js"></script>
   </head>
   <body x-data="calendarApp()" x-init="init()" class="container">
     <main>
@@ -57,11 +60,17 @@
           modal: false,
           editing: false,
           event: null,
+          timezone: "UTC",
           form: { title: "", start: "", end: "", frequency: "none", until: "", recurring: false, scope: "series" },
 
-          init() {
+          async init() {
             const app = this;
+            const timezoneResponse = await fetch("/api/timezone");
+            const timezoneData = await timezoneResponse.json();
+            if (!timezoneResponse.ok) throw new Error(timezoneData.error || "Could not load timezone");
+            this.timezone = timezoneData.timezone;
             this.calendar = new FullCalendar.Calendar(document.getElementById("calendar"), {
+              timeZone: this.timezone,
               initialView: "dayGridMonth",
               height: "calc(100vh - 8rem)",
               expandRows: true,
@@ -102,9 +111,8 @@
           },
 
           inputDate(value) {
-            const date = value instanceof Date ? value : new Date(value);
-            const pad = number => String(number).padStart(2, "0");
-            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+            const date = value instanceof Date ? moment.tz(value, this.timezone) : moment.tz(value, this.timezone);
+            return date.format("YYYY-MM-DDTHH:mm");
           },
 
           baseForm() {

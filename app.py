@@ -3,20 +3,51 @@ import os
 from datetime import date, datetime, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import caldav
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
-from icalendar import Calendar, Event
+from icalendar import Calendar, Event, Timezone
 
 load_dotenv()
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+TZ_NAME = os.getenv("TZ", "UTC")
+try:
+    SERVER_TIMEZONE = ZoneInfo(TZ_NAME)
+except ZoneInfoNotFoundError as error:
+    raise RuntimeError(f"TZ must be a valid IANA timezone, got {TZ_NAME!r}") from error
+
 CALDAV_URL = os.getenv("CALDAV_URL") or "http://localhost:5232/"
 CALDAV_USERNAME = os.getenv("CALDAV_USERNAME") or ""
 CALDAV_PASSWORD = os.getenv("CALDAV_PASSWORD") or ""
+
+
+def add_server_timezone(cal):
+    has_timed_event = any(
+        isinstance(value.dt, datetime) and value.dt.tzinfo == SERVER_TIMEZONE
+        for component in cal.walk("VEVENT")
+        for name in ("DTSTART", "DTEND", "RECURRENCE-ID")
+        for value in [component.get(name)]
+        if value is not None and hasattr(value, "dt")
+    )
+    has_timezone = any(str(component.get("TZID")) == TZ_NAME for component in cal.walk("VTIMEZONE"))
+    if has_timed_event and not has_timezone:
+        cal.add_component(Timezone.from_tzinfo(SERVER_TIMEZONE, tzid=TZ_NAME, last_date=date(2100, 1, 1)))
+
+
+def parse_date(value):
+    value = value.replace("Z", "+00:00")
+    parsed = date.fromisoformat(value) if "T" not in value else datetime.fromisoformat(value)
+    if isinstance(parsed, datetime):
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=SERVER_TIMEZONE)
+        return parsed.astimezone(SERVER_TIMEZONE)
+    return parsed
+
 
 if not urlparse(CALDAV_URL).scheme or not urlparse(CALDAV_URL).netloc:
     raise RuntimeError("CALDAV_URL must include a scheme and host, e.g. http://localhost:5232/")
@@ -32,11 +63,6 @@ def calendar():
     if not calendars:
         raise RuntimeError("No CalDAV calendar found")
     return calendars[0]
-
-
-def parse_date(value):
-    value = value.replace("Z", "+00:00")
-    return date.fromisoformat(value) if "T" not in value else datetime.fromisoformat(value)
 
 
 def uid(component):
@@ -113,6 +139,11 @@ def index():
     return send_from_directory(app.root_path, "index.html")
 
 
+@app.get("/api/timezone")
+def get_timezone():
+    return jsonify(timezone=TZ_NAME)
+
+
 @app.get("/api/events")
 def get_events():
     try:
@@ -142,6 +173,7 @@ def create_event():
         item.add("DTSTAMP", datetime.now(timezone.utc))
         cal = Calendar()
         cal.add_component(item)
+        add_server_timezone(cal)
         calendar().save_event(cal.to_ical())
         return jsonify(event_json(item)), 201
     except Exception as error:
@@ -171,6 +203,7 @@ def update_event(event_id):
                 if "RRULE" in target:
                     del target["RRULE"]
                 add_recurrence(target, data.get("frequency"), data.get("until"))
+        add_server_timezone(cal)
         resource.data = cal.to_ical()
         resource.save()
         return jsonify(event_json(target))
@@ -206,4 +239,4 @@ def delete_event(event_id):
 
 
 if __name__ == "__main__":
-    app.run(debug=os.getenv("FLASK_DEBUG") == "1", port=5000)
+    app.run(debug=os.getenv("FLASK_DEBUG") == "1", host="0.0.0.0", port=5000)
