@@ -2,35 +2,40 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>CalDAV Calendar</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <title>calpine</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/skeleton-css@2.0.4/css/skeleton.min.css" />
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/moment@2.30.1/min/moment.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/moment-timezone@0.5.43/builds/moment-timezone-with-data.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@fullcalendar/moment-timezone@6.1.10/index.global.min.js"></script>
   </head>
-  <body x-data="calendarApp()" x-init="init()" class="container">
-    <main>
-      <h1>CalDAV Calendar Interface</h1>
+  <body x-data="calendarApp()" x-init="init()" class="container u-full-width u-max-full-width">
+    <main style="padding: 0 1%">
+      <h4>calpine <progress x-show="loading" aria-label="Loading events"></progress></h4>
       <div id="calendar"></div>
     </main>
 
     <dialog x-ref="dialog" @close="modal = false">
       <article>
         <header>
-          <button aria-label="Close" rel="prev" type="button" @click="close()"></button>
           <h2 x-text="editing ? 'Edit event' : 'New event'"></h2>
+          <button aria-label="Close" type="button" class="u-pull-right" @click="close()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </header>
         <form @submit.prevent="save()">
           <label for="title">Title</label>
-          <input id="title" x-model="form.title" required autofocus />
+          <input id="title" type="text" class="u-full-width" x-model="form.title" required autofocus />
           <label for="start">Start</label>
-          <input id="start" type="datetime-local" x-model="form.start" required />
+          <input id="start" type="datetime-local" class="u-full-width" x-model="form.start" required />
           <label for="end">End</label>
-          <input id="end" type="datetime-local" x-model="form.end" />
+          <input id="end" type="datetime-local" class="u-full-width" x-model="form.end" />
           <label for="frequency">Repeat</label>
-          <select id="frequency" x-model="form.frequency">
+          <select id="frequency" class="u-full-width" x-model="form.frequency">
             <option value="none">Does not repeat</option>
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
@@ -38,16 +43,16 @@
             <option value="yearly">Yearly</option>
           </select>
           <label x-show="form.frequency !== 'none'" for="until">Repeat until</label>
-          <input x-show="form.frequency !== 'none'" id="until" type="date" x-model="form.until" />
+          <input x-show="form.frequency !== 'none'" id="until" type="date" class="u-full-width" x-model="form.until" />
           <fieldset x-show="editing && form.recurring">
             <legend>Apply changes to</legend>
             <label><input type="radio" value="occurrence" x-model="form.scope" /> This event</label>
             <label><input type="radio" value="series" x-model="form.scope" /> Entire series</label>
           </fieldset>
           <footer>
-            <button type="button" class="secondary" x-show="editing" @click="remove()">Delete</button>
-            <button type="button" class="secondary" @click="close()">Cancel</button>
-            <button type="submit">Save</button>
+            <button type="button" x-show="editing" @click="remove()">Delete</button>
+            <button type="button" @click="close()">Cancel</button>
+            <button type="submit" class="button-primary">Save</button>
           </footer>
         </form>
       </article>
@@ -58,6 +63,7 @@
         return {
           calendar: null,
           modal: false,
+          loading: false,
           editing: false,
           event: null,
           timezone: "UTC",
@@ -75,14 +81,23 @@
               height: "calc(100vh - 8rem)",
               expandRows: true,
               headerToolbar: {
-                left: "prev,next today",
+                left: "prev,next today refresh",
                 center: "title",
                 right: "dayGridMonth,timeGridWeek,timeGridDay",
+              },
+              customButtons: {
+                refresh: {
+                  text: "Refresh",
+                  click: () => app.calendar.refetchEvents(),
+                },
+              },
+              loading(isLoading) {
+                app.loading = isLoading;
               },
               editable: true,
               selectable: true,
               events(info, success, failure) {
-                fetch(`/api/events?start=${encodeURIComponent(info.startStr)}&end=${encodeURIComponent(info.endStr)}`)
+                fetch(`/api/events?start=${encodeURIComponent(info.startStr)}&end=${encodeURIComponent(info.endStr)}`, { cache: "no-store" })
                   .then(async response => {
                     const data = await response.json();
                     if (!response.ok) throw new Error(data.error || "Could not load events");
@@ -174,6 +189,7 @@
           remove() {
             const scope = this.form.recurring ? this.form.scope : "series";
             if (!confirm(`Delete ${scope === "occurrence" ? "this event" : "event series"}?`)) return;
+            this.close();
             const query = scope === "occurrence" ? "?scope=occurrence" : "";
             fetch(`/api/events/${this.event.id}${query}`, { method: "DELETE" })
               .then(async response => {
@@ -181,10 +197,12 @@
                 if (!response.ok) throw new Error(data.error || "Could not delete event");
               })
               .then(() => {
-                this.close();
                 this.calendar.refetchEvents();
               })
-              .catch(error => alert(error.message));
+              .catch(error => {
+                alert(error.message);
+                this.calendar.refetchEvents();
+              });
           },
 
           update(event, revert) {
