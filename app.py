@@ -118,6 +118,7 @@ def event_json(component):
         "frequency": frequency,
         "until": until,
         "title": str(component.get("SUMMARY", "")),
+        "location": str(component.get("LOCATION", "")),
         "start": start.isoformat(),
         "end": end.isoformat() if end else None,
         "allDay": is_all_day(component),
@@ -149,6 +150,7 @@ def set_property(item, name, value):
 def update_values(item, data):
     all_day = bool(data.get("allDay"))
     set_property(item, "SUMMARY", data.get("title", ""))
+    set_property(item, "LOCATION", data.get("location") or None)
     set_property(item, "DTSTART", parse_date(data["start"], all_day))
     if data.get("end"):
         set_property(item, "DTEND", parse_date(data["end"], all_day))
@@ -190,6 +192,8 @@ def create_event():
         item = Event()
         item.add("UID", data.get("id") or str(uuid4()))
         item.add("SUMMARY", data["title"])
+        if data.get("location"):
+            item.add("LOCATION", data["location"])
         all_day = bool(data.get("allDay"))
         item.add("DTSTART", parse_date(data["start"], all_day))
         if data.get("end"):

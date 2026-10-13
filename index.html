@@ -30,6 +30,8 @@
         <form @submit.prevent="save()">
           <label for="title">Title</label>
           <input id="title" type="text" class="u-full-width" x-model="form.title" required autofocus />
+          <label for="location">Location</label>
+          <input id="location" type="text" class="u-full-width" x-model="form.location" />
           <label for="allDay"><input id="allDay" type="checkbox" x-model="form.allDay" @change="reformat()" /> All day</label>
           <label for="start">Start</label>
           <input id="start" :type="form.allDay ? 'date' : 'datetime-local'" class="u-full-width" x-model="form.start" required />
@@ -68,7 +70,7 @@
           editing: false,
           event: null,
           timezone: "UTC",
-          form: { title: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" },
+          form: { title: "", location: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" },
 
           async init() {
             const app = this;
@@ -84,11 +86,19 @@
               headerToolbar: {
                 left: "prev,next today refresh",
                 center: "title",
-                right: "dayGridMonth,timeGridWeek,timeGridDay",
+                right: "addEvent dayGridMonth,timeGridWeek,timeGridDay",
               },
               customButtons: {
+                addEvent: {
+                  text: "+",
+                  hint: "Add event",
+                  click: () => {
+                    app.calendar.gotoDate(moment.tz(app.timezone).toDate());
+                    app.openNew();
+                  },
+                },
                 refresh: {
-                  text: "Refresh",
+                  text: "refresh",
                   click: () => app.calendar.refetchEvents(),
                 },
               },
@@ -109,6 +119,14 @@
               },
               select(info) {
                 app.openNew(info.start, info.end, info.allDay, info.startStr, info.endStr);
+              },
+              dateClick(info) {
+                if (info.allDay) {
+                  const start = info.dateStr.slice(0, 10);
+                  app.openNew(null, null, true, start, moment(start).add(1, "day").format("YYYY-MM-DD"));
+                } else {
+                  app.openNew(info.date, moment(info.date).add(1, "hour").toDate(), false);
+                }
               },
               eventChange(info) {
                 if (info.event.extendedProps.recurring) {
@@ -138,7 +156,7 @@
           },
 
           baseForm() {
-            return { title: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" };
+            return { title: "", location: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" };
           },
 
           // Toggling all-day swaps the input type, so the bound values have to be
@@ -151,7 +169,15 @@
             this.form.end = convert(this.form.end);
           },
 
-          openNew(start, end, allDay = false, startStr = "", endStr = "") {
+          // Single entry point for bringing up a blank event. FullCalendar passes
+          // an explicit range when it has one; with no start we anchor on "now" in
+          // the server's timezone and default to an hour long. All-day callers send
+          // date-only strings, since a Date would be shifted by the offset.
+          openNew(start = null, end = null, allDay = false, startStr = "", endStr = "") {
+            if (!start && !allDay) {
+              start = moment.tz(this.timezone).toDate();
+              end = moment(start).add(1, "hour").toDate();
+            }
             this.editing = false;
             this.event = null;
             this.form = {
@@ -172,6 +198,7 @@
             this.form = {
               ...this.baseForm(),
               title: event.title,
+              location: event.extendedProps.location || "",
               allDay,
               start: allDay ? this.dateOnly(event.startStr) : this.inputDate(event.start),
               end: event.end ? (allDay ? this.dateOnly(event.endStr) : this.inputDate(event.end)) : "",
@@ -235,6 +262,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 title: event.title,
+                location: event.extendedProps.location || "",
                 start: event.startStr,
                 end: event.endStr,
                 allDay: Boolean(event.allDay || event.extendedProps.allDay),
