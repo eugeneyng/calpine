@@ -60,16 +60,27 @@ if not urlparse(CALDAV_URL).scheme or not urlparse(CALDAV_URL).netloc:
     raise RuntimeError("CALDAV_URL must include a scheme and host, e.g. http://localhost:5232/")
 
 
+_calendar = None
+
+
 def calendar():
-    client = caldav.DAVClient(
-        url=CALDAV_URL,
-        username=CALDAV_USERNAME,
-        password=CALDAV_PASSWORD,
-    )
-    calendars = client.principal().calendars()
-    if not calendars:
-        raise RuntimeError("No CalDAV calendar found")
-    return calendars[0]
+    """The CalDAV calendar, resolved once per process.
+
+    Resolving it runs principal discovery and a calendar PROPFIND. Doing that
+    on every request added two round-trips to every edit.
+    """
+    global _calendar
+    if _calendar is None:
+        client = caldav.DAVClient(
+            url=CALDAV_URL,
+            username=CALDAV_USERNAME,
+            password=CALDAV_PASSWORD,
+        )
+        calendars = client.principal().calendars()
+        if not calendars:
+            raise RuntimeError("No CalDAV calendar found")
+        _calendar = calendars[0]
+    return _calendar
 
 
 def uid(component):
@@ -85,12 +96,44 @@ def event_id(component):
     return uid(component) + (f"|{recurrence_id(component)}" if recurrence_id(component) else "")
 
 
+def _has_master(ical, series_id):
+    # A resource holding only RECURRENCE-ID overrides has no master to edit.
+    return any(uid(item) == series_id and not item.get("RECURRENCE-ID") for item in ical.walk("VEVENT"))
+
+
+def _series_resource_by_href(cal, series_id):
+    """GET the series resource straight from its href, or None if it isn't there.
+
+    A series is a single calendar object resource, and Radicale and Baikal both
+    name it "<uid>.ics", so this asks for exactly one event instead of the whole
+    calendar. A UID-filtered query looks like the better tool but isn't: servers
+    without a UID index load every item to evaluate the text-match anyway.
+    """
+    try:
+        resource = caldav.Event(cal.client, url=cal.url.join(f"{series_id}.ics"), parent=cal)
+        resource.load()
+    except caldav.error.NotFoundError:
+        return None
+    if not _has_master(Calendar.from_ical(resource.data), series_id):
+        return None
+    return resource
+
+
 def find_series(cal, event_id):
+    """Fetch the single resource that holds this series.
+
+    This used to walk every event in the calendar and parse each one to match a
+    UID, so every edit transferred and parsed the whole calendar. Servers that
+    don't name resources after the UID fall back to that walk.
+    """
     series_id = event_id.split("|", 1)[0]
-    for resource in cal.events():
-        ical = Calendar.from_ical(resource.data)
-        if any(uid(item) == series_id and not item.get("RECURRENCE-ID") for item in ical.walk("VEVENT")):
-            return resource, ical, series_id
+    resource = _series_resource_by_href(cal, series_id)
+    if resource is not None:
+        return resource, Calendar.from_ical(resource.data), series_id
+    for candidate in cal.events():
+        ical = Calendar.from_ical(candidate.data)
+        if _has_master(ical, series_id):
+            return candidate, ical, series_id
     return None, None, series_id
 
 
