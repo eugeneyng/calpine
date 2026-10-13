@@ -30,10 +30,11 @@
         <form @submit.prevent="save()">
           <label for="title">Title</label>
           <input id="title" type="text" class="u-full-width" x-model="form.title" required autofocus />
+          <label for="allDay"><input id="allDay" type="checkbox" x-model="form.allDay" @change="reformat()" /> All day</label>
           <label for="start">Start</label>
-          <input id="start" type="datetime-local" class="u-full-width" x-model="form.start" required />
+          <input id="start" :type="form.allDay ? 'date' : 'datetime-local'" class="u-full-width" x-model="form.start" required />
           <label for="end">End</label>
-          <input id="end" type="datetime-local" class="u-full-width" x-model="form.end" />
+          <input id="end" :type="form.allDay ? 'date' : 'datetime-local'" class="u-full-width" x-model="form.end" />
           <label for="frequency">Repeat</label>
           <select id="frequency" class="u-full-width" x-model="form.frequency">
             <option value="none">Does not repeat</option>
@@ -67,7 +68,7 @@
           editing: false,
           event: null,
           timezone: "UTC",
-          form: { title: "", start: "", end: "", frequency: "none", until: "", recurring: false, scope: "series" },
+          form: { title: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" },
 
           async init() {
             const app = this;
@@ -107,7 +108,7 @@
                   .catch(failure);
               },
               select(info) {
-                app.openNew(info.start, info.end);
+                app.openNew(info.start, info.end, info.allDay, info.startStr, info.endStr);
               },
               eventChange(info) {
                 if (info.event.extendedProps.recurring) {
@@ -126,31 +127,54 @@
           },
 
           inputDate(value) {
-            const date = value instanceof Date ? moment.tz(value, this.timezone) : moment.tz(value, this.timezone);
-            return date.format("YYYY-MM-DDTHH:mm");
+            return moment.tz(value, this.timezone).format("YYYY-MM-DDTHH:mm");
+          },
+
+          // All-day values are calendar dates, not instants. startStr is already the
+          // date-only string and never gets shifted by the browser/server offset --
+          // converting it through moment.tz would move the event by a day.
+          dateOnly(value) {
+            return (typeof value === "string" ? value : "").slice(0, 10);
           },
 
           baseForm() {
-            return { title: "", start: "", end: "", frequency: "none", until: "", recurring: false, scope: "series" };
+            return { title: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" };
           },
 
-          openNew(start, end) {
+          // Toggling all-day swaps the input type, so the bound values have to be
+          // reshaped too or the field silently reads as empty.
+          reformat() {
+            const convert = this.form.allDay
+              ? (value) => this.dateOnly(value)
+              : (value) => moment.tz(value, this.timezone).format("YYYY-MM-DDTHH:mm");
+            this.form.start = convert(this.form.start);
+            this.form.end = convert(this.form.end);
+          },
+
+          openNew(start, end, allDay = false, startStr = "", endStr = "") {
             this.editing = false;
             this.event = null;
-            this.form = { ...this.baseForm(), start: this.inputDate(start), end: this.inputDate(end) };
+            this.form = {
+              ...this.baseForm(),
+              allDay,
+              start: allDay ? this.dateOnly(startStr) : this.inputDate(start),
+              end: allDay ? this.dateOnly(endStr) : this.inputDate(end),
+            };
             this.modal = true;
             this.$refs.dialog.showModal();
           },
 
           openEdit(event) {
             const recurring = event.extendedProps.recurring;
+            const allDay = Boolean(event.allDay || event.extendedProps.allDay);
             this.editing = true;
             this.event = event;
             this.form = {
               ...this.baseForm(),
               title: event.title,
-              start: this.inputDate(event.start),
-              end: event.end ? this.inputDate(event.end) : "",
+              allDay,
+              start: allDay ? this.dateOnly(event.startStr) : this.inputDate(event.start),
+              end: event.end ? (allDay ? this.dateOnly(event.endStr) : this.inputDate(event.end)) : "",
               recurring,
               frequency: event.extendedProps.frequency || "none",
               until: event.extendedProps.until || "",
@@ -209,7 +233,12 @@
             fetch(`/api/events/${event.id}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ title: event.title, start: event.startStr, end: event.endStr }),
+              body: JSON.stringify({
+                title: event.title,
+                start: event.startStr,
+                end: event.endStr,
+                allDay: Boolean(event.allDay || event.extendedProps.allDay),
+              }),
             }).then(response => {
               if (!response.ok) throw new Error("Could not update event");
             }).catch(error => {

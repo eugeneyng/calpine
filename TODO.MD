@@ -1,7 +1,7 @@
 # TODO.MD
 
-- [ ] `[bug]` Fix editing events
+- [x] `[bug]` Fix editing events
+- [ ] `[feature]` Add location as a field
 - [ ] `[feature]` Support multiple WebDAV servers
 - [ ] `[feature]` Login/logout functionality
-- [ ] `[feature]` `[improvement]` SQLite integration for faster loading
-- [ ] `[feature]` CalDAV sync
+- [ ] `[feature]` `[improvement]` CALDAV sync with SQLite for faster loading

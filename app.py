@@ -39,7 +39,9 @@ def add_server_timezone(cal):
         cal.add_component(Timezone.from_tzinfo(SERVER_TIMEZONE, tzid=TZ_NAME, last_date=date(2100, 1, 1)))
 
 
-def parse_date(value):
+def parse_date(value, all_day=False):
+    if all_day:
+        return date.fromisoformat(value[:10])
     value = value.replace("Z", "+00:00")
     parsed = date.fromisoformat(value) if "T" not in value else datetime.fromisoformat(value)
     if isinstance(parsed, datetime):
@@ -47,6 +49,11 @@ def parse_date(value):
             return parsed.replace(tzinfo=SERVER_TIMEZONE)
         return parsed.astimezone(SERVER_TIMEZONE)
     return parsed
+
+
+def is_all_day(component):
+    start = component.decoded("DTSTART") if component.get("DTSTART") else None
+    return isinstance(start, date) and not isinstance(start, datetime)
 
 
 if not urlparse(CALDAV_URL).scheme or not urlparse(CALDAV_URL).netloc:
@@ -113,7 +120,7 @@ def event_json(component):
         "title": str(component.get("SUMMARY", "")),
         "start": start.isoformat(),
         "end": end.isoformat() if end else None,
-        "allDay": isinstance(start, date) and not isinstance(start, datetime),
+        "allDay": is_all_day(component),
     }
 
 
@@ -125,13 +132,30 @@ def add_recurrence(item, frequency, until):
         item.add("RRULE", rule)
 
 
+def set_property(item, name, value):
+    """Rewrite a property in place.
+
+    Assigning straight into an existing property keeps its old parameters and never
+    re-serialises to iCalendar basic format -- a datetime assigned onto a DTSTART that
+    still carries VALUE=DATE emits `DTSTART:2026-10-22 00:00:00+01:00`, which CalDAV
+    servers reject. Dropping the property first lets icalendar re-derive the type.
+    """
+    if name in item:
+        del item[name]
+    if value is not None:
+        item.add(name, value)
+
+
 def update_values(item, data):
-    item["SUMMARY"] = data["title"]
-    item["DTSTART"] = parse_date(data["start"])
+    all_day = bool(data.get("allDay"))
+    set_property(item, "SUMMARY", data.get("title", ""))
+    set_property(item, "DTSTART", parse_date(data["start"], all_day))
     if data.get("end"):
-        item["DTEND"] = parse_date(data["end"])
-    elif "DTEND" in item:
-        del item["DTEND"]
+        set_property(item, "DTEND", parse_date(data["end"], all_day))
+        # RFC 5545 3.6.3: DTEND and DURATION must not both appear.
+        set_property(item, "DURATION", None)
+    else:
+        set_property(item, "DTEND", None)
 
 
 @app.get("/")
@@ -166,9 +190,10 @@ def create_event():
         item = Event()
         item.add("UID", data.get("id") or str(uuid4()))
         item.add("SUMMARY", data["title"])
-        item.add("DTSTART", parse_date(data["start"]))
+        all_day = bool(data.get("allDay"))
+        item.add("DTSTART", parse_date(data["start"], all_day))
         if data.get("end"):
-            item.add("DTEND", parse_date(data["end"]))
+            item.add("DTEND", parse_date(data["end"], all_day))
         add_recurrence(item, data.get("frequency"), data.get("until"))
         item.add("DTSTAMP", datetime.now(timezone.utc))
         cal = Calendar()
@@ -190,10 +215,16 @@ def update_event(event_id):
         target = find_component(cal, event_id)
         scope = data.get("scope", "series")
         if "|" in event_id and scope == "occurrence":
+            master = find_component(cal, series_id)
+            # RFC 5545 3.8.4.4: DTSTART's value type must not change across an override.
+            # Checked whether the override already exists or is being created.
+            if master is not None and bool(data.get("allDay")) != is_all_day(master):
+                return jsonify(error="An occurrence cannot change between all-day and timed"), 400
             if target is None:
                 target = Event()
                 target.add("UID", series_id)
                 target.add("RECURRENCE-ID", parse_date(data["recurrenceId"]))
+                target.add("DTSTAMP", datetime.now(timezone.utc))
                 cal.add_component(target)
             update_values(target, data)
         else:
