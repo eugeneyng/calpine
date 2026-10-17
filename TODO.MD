@@ -5,3 +5,4 @@
 - [x] `[feature]` Add location as a field
 - [ ] `[feature]` Support multiple WebDAV servers
 - [ ] `[feature]` Login/logout functionality
+- [ ] `[chore]` Switch styling to Bootstrap

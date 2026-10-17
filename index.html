@@ -2,70 +2,99 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>calpine</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/skeleton-css@2.0.4/css/skeleton.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/moment@2.30.1/min/moment.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/moment-timezone@0.5.43/builds/moment-timezone-with-data.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@fullcalendar/bootstrap5@6.1.10/index.global.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@fullcalendar/moment-timezone@6.1.10/index.global.min.js"></script>
   </head>
-  <body x-data="calendarApp()" x-init="init()" class="container u-full-width u-max-full-width">
-    <main style="padding: 0 1%">
-      <h4>calpine <progress x-show="loading" aria-label="Loading events"></progress></h4>
+  <body x-data="calendarApp()" x-init="init()" class="container-fluid">
+    <main class="p-3">
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <h4 class="mb-0">calpine</h4>
+        <div class="spinner-border spinner-border-sm text-primary" role="status" x-show="loading">
+          <span class="visually-hidden">Loading events</span>
+        </div>
+      </div>
       <div id="calendar"></div>
     </main>
 
-    <dialog x-ref="dialog" @close="modal = false">
-      <article>
-        <header>
-          <h2 x-text="editing ? 'Edit event' : 'New event'"></h2>
-          <button aria-label="Close" type="button" class="u-pull-right" @click="close()">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        </header>
-        <form @submit.prevent="save()">
-          <label for="title">Title</label>
-          <input id="title" type="text" class="u-full-width" x-model="form.title" required autofocus />
-          <label for="location">Location</label>
-          <input id="location" type="text" class="u-full-width" x-model="form.location" />
-          <label for="allDay"><input id="allDay" type="checkbox" x-model="form.allDay" @change="reformat()" /> All day</label>
-          <label for="start">Start</label>
-          <input id="start" :type="form.allDay ? 'date' : 'datetime-local'" class="u-full-width" x-model="form.start" required />
-          <label for="end">End</label>
-          <input id="end" :type="form.allDay ? 'date' : 'datetime-local'" class="u-full-width" x-model="form.end" />
-          <label for="frequency">Repeat</label>
-          <select id="frequency" class="u-full-width" x-model="form.frequency">
-            <option value="none">Does not repeat</option>
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-            <option value="yearly">Yearly</option>
-          </select>
-          <label x-show="form.frequency !== 'none'" for="until">Repeat until</label>
-          <input x-show="form.frequency !== 'none'" id="until" type="date" class="u-full-width" x-model="form.until" />
-          <fieldset x-show="editing && form.recurring">
-            <legend>Apply changes to</legend>
-            <label><input type="radio" value="occurrence" x-model="form.scope" /> This event</label>
-            <label><input type="radio" value="series" x-model="form.scope" /> Entire series</label>
-          </fieldset>
-          <footer>
-            <button type="button" x-show="editing" @click="remove()">Delete</button>
-            <button type="button" @click="close()">Cancel</button>
-            <button type="submit" class="button-primary">Save</button>
-          </footer>
-        </form>
-      </article>
-    </dialog>
+    <div class="modal fade" x-ref="dialog" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <form @submit.prevent="save()">
+            <div class="modal-header">
+              <h5 class="modal-title" x-text="editing ? 'Edit event' : 'New event'"></h5>
+              <button type="button" class="btn-close" aria-label="Close" @click="close()"></button>
+            </div>
+            <div class="modal-body">
+              <div class="mb-3">
+                <label class="form-label" for="title">Title</label>
+                <input id="title" type="text" class="form-control" x-ref="title" x-model="form.title" required />
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="location">Location</label>
+                <input id="location" type="text" class="form-control" x-model="form.location" />
+              </div>
+              <div class="form-check mb-3">
+                <input id="allDay" type="checkbox" class="form-check-input" x-model="form.allDay" @change="reformat()" />
+                <label class="form-check-label" for="allDay">All day</label>
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="start">Start</label>
+                <input id="start" :type="form.allDay ? 'date' : 'datetime-local'" class="form-control" x-model="form.start" required />
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="end">End</label>
+                <input id="end" :type="form.allDay ? 'date' : 'datetime-local'" class="form-control" x-model="form.end" />
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="frequency">Repeat</label>
+                <select id="frequency" class="form-select" x-model="form.frequency">
+                  <option value="none">Does not repeat</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </div>
+              <div class="mb-3" x-show="form.frequency !== 'none'">
+                <label class="form-label" for="until">Repeat until</label>
+                <input id="until" type="date" class="form-control" x-model="form.until" />
+              </div>
+              <fieldset class="mb-3" x-show="editing && form.recurring">
+                <legend class="fs-6">Apply changes to</legend>
+                <div class="form-check">
+                  <input id="scope-occurrence" type="radio" class="form-check-input" value="occurrence" x-model="form.scope" />
+                  <label class="form-check-label" for="scope-occurrence">This event</label>
+                </div>
+                <div class="form-check">
+                  <input id="scope-series" type="radio" class="form-check-input" value="series" x-model="form.scope" />
+                  <label class="form-check-label" for="scope-series">Entire series</label>
+                </div>
+              </fieldset>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-danger me-auto" x-show="editing" @click="remove()">Delete</button>
+              <button type="button" class="btn btn-secondary" @click="close()">Cancel</button>
+              <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
 
     <script>
       function calendarApp() {
         return {
           calendar: null,
-          modal: false,
+          dialog: null,
           loading: false,
           editing: false,
           event: null,
@@ -78,10 +107,13 @@
             const timezoneData = await timezoneResponse.json();
             if (!timezoneResponse.ok) throw new Error(timezoneData.error || "Could not load timezone");
             this.timezone = timezoneData.timezone;
+            this.dialog = new bootstrap.Modal(this.$refs.dialog);
+            this.$refs.dialog.addEventListener("shown.bs.modal", () => app.$refs.title.focus());
             this.calendar = new FullCalendar.Calendar(document.getElementById("calendar"), {
               timeZone: this.timezone,
+              themeSystem: "bootstrap5",
               initialView: "dayGridMonth",
-              height: "calc(100vh - 8rem)",
+              height: "calc(100vh - 9rem)",
               expandRows: true,
               headerToolbar: {
                 left: "prev,next today refresh",
@@ -186,8 +218,7 @@
               start: allDay ? this.dateOnly(startStr) : this.inputDate(start),
               end: allDay ? this.dateOnly(endStr) : this.inputDate(end),
             };
-            this.modal = true;
-            this.$refs.dialog.showModal();
+            this.dialog.show();
           },
 
           openEdit(event) {
@@ -208,13 +239,11 @@
               scope: "series",
               recurrenceId: event.extendedProps.recurrenceId || "",
             };
-            this.modal = true;
-            this.$refs.dialog.showModal();
+            this.dialog.show();
           },
 
           close() {
-            this.modal = false;
-            if (this.$refs.dialog.open) this.$refs.dialog.close();
+            this.dialog.hide();
           },
 
           save() {
