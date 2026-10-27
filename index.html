@@ -30,7 +30,7 @@
         <div class="modal-content">
           <form @submit.prevent="save()">
             <div class="modal-header">
-              <h5 class="modal-title" x-text="editing ? 'Edit event' : 'New event'"></h5>
+              <h5 class="modal-title" x-text="editing ? (form.recurring && form.scope === 'series' ? 'Edit series' : 'Edit event') : 'New event'"></h5>
               <button type="button" class="btn-close" aria-label="Close" @click="close()"></button>
             </div>
             <div class="modal-body">
@@ -54,7 +54,7 @@
                 <label class="form-label" for="end">End</label>
                 <input id="end" :type="form.allDay ? 'date' : 'datetime-local'" class="form-control" x-model="form.end" />
               </div>
-              <div class="mb-3">
+              <div class="mb-3" x-show="!form.recurring || form.scope === 'series'">
                 <label class="form-label" for="frequency">Repeat</label>
                 <select id="frequency" class="form-select" x-model="form.frequency">
                   <option value="none">Does not repeat</option>
@@ -62,22 +62,26 @@
                   <option value="weekly">Weekly</option>
                   <option value="monthly">Monthly</option>
                   <option value="yearly">Yearly</option>
+                  <template x-if="customFrequency">
+                    <option :value="customFrequency" x-text="'Custom (' + customFrequency + ')'"></option>
+                  </template>
                 </select>
               </div>
-              <div class="mb-3" x-show="form.frequency !== 'none'">
+              <div class="mb-3" x-show="(!form.recurring || form.scope === 'series') && form.frequency !== 'none'">
                 <label class="form-label" for="until">Repeat until</label>
                 <input id="until" type="date" class="form-control" x-model="form.until" />
               </div>
               <fieldset class="mb-3" x-show="editing && form.recurring">
                 <legend class="fs-6">Apply changes to</legend>
                 <div class="form-check">
-                  <input id="scope-occurrence" type="radio" class="form-check-input" value="occurrence" x-model="form.scope" />
+                  <input id="scope-occurrence" type="radio" class="form-check-input" value="occurrence" :checked="form.scope === 'occurrence'" @change="switchScope('occurrence')" />
                   <label class="form-check-label" for="scope-occurrence">This event</label>
                 </div>
                 <div class="form-check">
-                  <input id="scope-series" type="radio" class="form-check-input" value="series" x-model="form.scope" />
-                  <label class="form-check-label" for="scope-series">Entire series</label>
+                  <input id="scope-series" type="radio" class="form-check-input" value="series" :checked="form.scope === 'series'" :disabled="!forms.series" @change="switchScope('series')" />
+                  <label class="form-check-label" for="scope-series">Entire series <span class="text-muted fw-normal" x-show="!forms.series && !seriesError">(loading…)</span></label>
                 </div>
+                <div class="form-text text-danger" x-show="seriesError" x-text="seriesError"></div>
               </fieldset>
             </div>
             <div class="modal-footer">
@@ -99,7 +103,17 @@
           editing: false,
           event: null,
           timezone: "UTC",
-          form: { title: "", location: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" },
+          form: { title: "", location: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series", recurrenceId: "" },
+          // The dialog holds one snapshot per scope so switching between "This
+          // event" and "Entire series" doesn't lose edits made to the other one.
+          forms: { occurrence: null, series: null },
+          // What the series looked like when it was loaded; used to send only
+          // the recurrence fields the user actually changed.
+          baseline: { frequency: "none", until: "", allDay: false },
+          frequencyOptions: ["none", "daily", "weekly", "monthly", "yearly"],
+          customFrequency: "",
+          seriesError: "",
+          editToken: 0,
 
           async init() {
             const app = this;
@@ -188,7 +202,28 @@
           },
 
           baseForm() {
-            return { title: "", location: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series" };
+            return { title: "", location: "", start: "", end: "", allDay: false, frequency: "none", until: "", recurring: false, scope: "series", recurrenceId: "" };
+          },
+
+          // The editable fields of whichever scope is currently in the dialog.
+          formFields() {
+            const { title, location, allDay, start, end, frequency, until } = this.form;
+            return { title, location, allDay, start, end, frequency, until };
+          },
+
+          // Swap the dialog to the occurrence's or the series' snapshot. The
+          // Repeat controls only make sense for the series; occurrences don't
+          // carry an RRULE of their own.
+          switchScope(scope) {
+            if (!this.editing || !this.form.recurring || scope === this.form.scope) return;
+            if (scope === "series" && !this.forms.series) return;
+            this.forms[this.form.scope] = this.formFields();
+            this.form = {
+              ...this.forms[scope],
+              recurring: true,
+              scope,
+              recurrenceId: this.form.recurrenceId,
+            };
           },
 
           // Toggling all-day swaps the input type, so the bound values have to be
@@ -210,8 +245,13 @@
               start = moment.tz(this.timezone).toDate();
               end = moment(start).add(1, "hour").toDate();
             }
+            this.editToken += 1;
             this.editing = false;
             this.event = null;
+            this.forms = { occurrence: null, series: null };
+            this.baseline = { frequency: "none", until: "", allDay };
+            this.customFrequency = "";
+            this.seriesError = "";
             this.form = {
               ...this.baseForm(),
               allDay,
@@ -224,35 +264,113 @@
           openEdit(event) {
             const recurring = event.extendedProps.recurring;
             const allDay = Boolean(event.allDay || event.extendedProps.allDay);
-            this.editing = true;
-            this.event = event;
-            this.form = {
-              ...this.baseForm(),
+            const recurrenceId = event.extendedProps.recurrenceId || "";
+            const occurrence = {
               title: event.title,
               location: event.extendedProps.location || "",
               allDay,
               start: allDay ? this.dateOnly(event.startStr) : this.inputDate(event.start),
               end: event.end ? (allDay ? this.dateOnly(event.endStr) : this.inputDate(event.end)) : "",
-              recurring,
               frequency: event.extendedProps.frequency || "none",
               until: event.extendedProps.until || "",
-              scope: "series",
-              recurrenceId: event.extendedProps.recurrenceId || "",
             };
+            this.editToken += 1;
+            const token = this.editToken;
+            this.editing = true;
+            this.event = event;
+            this.forms = { occurrence, series: null };
+            this.customFrequency = "";
+            this.seriesError = "";
+            if (recurring) {
+              // Expanded occurrences never carry the series' RRULE, so reset the
+              // occurrence snapshot's recurrence fields; the series snapshot
+              // loaded below supplies them.
+              occurrence.frequency = "none";
+              occurrence.until = "";
+              this.baseline = { frequency: "none", until: "", allDay };
+              this.form = { ...occurrence, recurring: true, scope: "occurrence", recurrenceId };
+              if (event.extendedProps.seriesId) {
+                this.loadSeries(event.extendedProps.seriesId, token);
+              } else {
+                this.seriesError = "Could not load the rest of the series; only this event can be edited.";
+              }
+            } else {
+              this.baseline = { frequency: occurrence.frequency, until: occurrence.until, allDay };
+              this.forms.series = { ...occurrence };
+              this.form = { ...occurrence, recurring: false, scope: "series", recurrenceId: "" };
+            }
             this.dialog.show();
           },
 
+          async loadSeries(seriesId, token) {
+            try {
+              const response = await fetch(`/api/series/${encodeURIComponent(seriesId)}`, { cache: "no-store" });
+              const data = await response.json();
+              if (!response.ok) throw new Error(data.error || "Could not load event series");
+              if (token !== this.editToken) return;
+              const allDay = Boolean(data.allDay);
+              const series = {
+                title: data.title || "",
+                location: data.location || "",
+                allDay,
+                start: allDay ? this.dateOnly(data.start) : this.inputDate(data.start),
+                end: data.end ? (allDay ? this.dateOnly(data.end) : this.inputDate(data.end)) : "",
+                frequency: data.frequency || "none",
+                until: data.until || "",
+              };
+              this.forms.series = series;
+              this.baseline = { frequency: series.frequency, until: series.until, allDay };
+              this.customFrequency = this.frequencyOptions.includes(series.frequency) ? "" : series.frequency;
+            } catch (error) {
+              if (token !== this.editToken) return;
+              this.seriesError = "Could not load the rest of the series; only this event can be edited.";
+            }
+          },
+
           close() {
+            // Invalidate any in-flight series fetch so it can't update a
+            // dialog that was closed or reopened for another event.
+            this.editToken += 1;
             this.dialog.hide();
           },
 
           save() {
+            if (this.editing && this.form.recurring && this.form.scope === "series" && !this.forms.series) {
+              alert("Could not load the rest of the series; only this event can be edited.");
+              return;
+            }
             const method = this.editing ? "PUT" : "POST";
             const url = this.editing ? `/api/events/${this.event.id}` : "/api/events";
+            const payload = {
+              title: this.form.title,
+              location: this.form.location,
+              start: this.form.start,
+              end: this.form.end,
+              allDay: this.form.allDay,
+            };
+            if (this.editing && this.form.recurring) {
+              payload.scope = this.form.scope;
+              if (this.form.scope === "occurrence") {
+                payload.recurrenceId = this.form.recurrenceId;
+              } else {
+                // Send only what changed. An untouched rule is left alone so
+                // BYDAY/COUNT/INTERVAL survive; until is also sent when allDay
+                // changes so the server can re-type the UNTIL value.
+                if (this.form.frequency !== this.baseline.frequency) {
+                  payload.frequency = this.form.frequency;
+                }
+                if (this.form.until !== this.baseline.until || this.form.allDay !== this.baseline.allDay) {
+                  payload.until = this.form.until;
+                }
+              }
+            } else {
+              payload.frequency = this.form.frequency;
+              payload.until = this.form.until;
+            }
             fetch(url, {
               method,
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(this.form),
+              body: JSON.stringify(payload),
             })
               .then(async response => {
                 const data = await response.json();
@@ -267,6 +385,10 @@
           },
 
           remove() {
+            if (this.editing && this.form.recurring && this.form.scope === "series" && !this.forms.series) {
+              alert("Could not load the rest of the series; only this event can be edited.");
+              return;
+            }
             const scope = this.form.recurring ? this.form.scope : "series";
             if (!confirm(`Delete ${scope === "occurrence" ? "this event" : "event series"}?`)) return;
             this.close();
