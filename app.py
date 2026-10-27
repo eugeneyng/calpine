@@ -75,6 +75,12 @@ def calendar():
             url=CALDAV_URL,
             username=CALDAV_USERNAME,
             password=CALDAV_PASSWORD,
+            # The server sits behind a proxy that gzips responses and weakens
+            # their ETags to W/"...".  caldav echoes that ETag in If-Match, and
+            # RFC 9110 requires a strong validator there, so Radicale rejects
+            # every PUT with 412.  Ask for an uncompressed response so the
+            # server returns a strong ETag that the conditional PUT accepts.
+            headers={"Accept-Encoding": "identity"},
         )
         calendars = client.principal().calendars()
         if not calendars:
