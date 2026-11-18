@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -24,6 +24,7 @@ except ZoneInfoNotFoundError as error:
 CALDAV_URL = os.getenv("CALDAV_URL") or "http://localhost:5232/"
 CALDAV_USERNAME = os.getenv("CALDAV_USERNAME") or ""
 CALDAV_PASSWORD = os.getenv("CALDAV_PASSWORD") or ""
+FREQUENCIES = ("daily", "weekly", "monthly", "yearly")
 
 
 def add_server_timezone(cal):
@@ -39,7 +40,9 @@ def add_server_timezone(cal):
         cal.add_component(Timezone.from_tzinfo(SERVER_TIMEZONE, tzid=TZ_NAME, last_date=date(2100, 1, 1)))
 
 
-def parse_date(value):
+def parse_date(value, all_day=False):
+    if all_day:
+        return date.fromisoformat(value[:10])
     value = value.replace("Z", "+00:00")
     parsed = date.fromisoformat(value) if "T" not in value else datetime.fromisoformat(value)
     if isinstance(parsed, datetime):
@@ -49,20 +52,42 @@ def parse_date(value):
     return parsed
 
 
+def is_all_day(component):
+    start = component.decoded("DTSTART") if component.get("DTSTART") else None
+    return isinstance(start, date) and not isinstance(start, datetime)
+
+
 if not urlparse(CALDAV_URL).scheme or not urlparse(CALDAV_URL).netloc:
     raise RuntimeError("CALDAV_URL must include a scheme and host, e.g. http://localhost:5232/")
 
 
+_calendar = None
+
+
 def calendar():
-    client = caldav.DAVClient(
-        url=CALDAV_URL,
-        username=CALDAV_USERNAME,
-        password=CALDAV_PASSWORD,
-    )
-    calendars = client.principal().calendars()
-    if not calendars:
-        raise RuntimeError("No CalDAV calendar found")
-    return calendars[0]
+    """The CalDAV calendar, resolved once per process.
+
+    Resolving it runs principal discovery and a calendar PROPFIND. Doing that
+    on every request added two round-trips to every edit.
+    """
+    global _calendar
+    if _calendar is None:
+        client = caldav.DAVClient(
+            url=CALDAV_URL,
+            username=CALDAV_USERNAME,
+            password=CALDAV_PASSWORD,
+            # The server sits behind a proxy that gzips responses and weakens
+            # their ETags to W/"...".  caldav echoes that ETag in If-Match, and
+            # RFC 9110 requires a strong validator there, so Radicale rejects
+            # every PUT with 412.  Ask for an uncompressed response so the
+            # server returns a strong ETag that the conditional PUT accepts.
+            headers={"Accept-Encoding": "identity"},
+        )
+        calendars = client.principal().calendars()
+        if not calendars:
+            raise RuntimeError("No CalDAV calendar found")
+        _calendar = calendars[0]
+    return _calendar
 
 
 def uid(component):
@@ -78,31 +103,103 @@ def event_id(component):
     return uid(component) + (f"|{recurrence_id(component)}" if recurrence_id(component) else "")
 
 
+def _has_master(ical, series_id):
+    # A resource holding only RECURRENCE-ID overrides has no master to edit.
+    return any(uid(item) == series_id and not item.get("RECURRENCE-ID") for item in ical.walk("VEVENT"))
+
+
+def _series_resource_by_href(cal, series_id):
+    """GET the series resource straight from its href, or None if it isn't there.
+
+    A series is a single calendar object resource, and Radicale and Baikal both
+    name it "<uid>.ics", so this asks for exactly one event instead of the whole
+    calendar. A UID-filtered query looks like the better tool but isn't: servers
+    without a UID index load every item to evaluate the text-match anyway.
+    """
+    try:
+        resource = caldav.Event(cal.client, url=cal.url.join(f"{series_id}.ics"), parent=cal)
+        resource.load()
+    except caldav.error.NotFoundError:
+        return None
+    if not _has_master(Calendar.from_ical(resource.data), series_id):
+        return None
+    return resource
+
+
 def find_series(cal, event_id):
+    """Fetch the single resource that holds this series.
+
+    This used to walk every event in the calendar and parse each one to match a
+    UID, so every edit transferred and parsed the whole calendar. Servers that
+    don't name resources after the UID fall back to that walk.
+    """
     series_id = event_id.split("|", 1)[0]
-    for resource in cal.events():
-        ical = Calendar.from_ical(resource.data)
-        if any(uid(item) == series_id and not item.get("RECURRENCE-ID") for item in ical.walk("VEVENT")):
-            return resource, ical, series_id
+    resource = _series_resource_by_href(cal, series_id)
+    if resource is not None:
+        return resource, Calendar.from_ical(resource.data), series_id
+    for candidate in cal.events():
+        ical = Calendar.from_ical(candidate.data)
+        if _has_master(ical, series_id):
+            return candidate, ical, series_id
     return None, None, series_id
+
+
+def _as_utc(value):
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=SERVER_TIMEZONE)
+        return value.astimezone(timezone.utc)
+    return value
 
 
 def find_component(ical, event_id):
     series_id, _, instance = event_id.partition("|")
+    wanted = parse_date(instance) if instance else None
     for item in ical.walk("VEVENT"):
-        if uid(item) == series_id and ((not instance and not item.get("RECURRENCE-ID")) or recurrence_id(item) == instance):
+        if uid(item) != series_id:
+            continue
+        value = item.get("RECURRENCE-ID")
+        if not instance:
+            if value is None:
+                return item
+        elif value is not None and _as_utc(value.dt) == _as_utc(wanted):
             return item
     return None
+
+
+def _first(value):
+    """vRecur values are one-item lists when parsed from the wire, scalars when built."""
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else None
+    return value
+
+
+def recurrence_values(component):
+    """The frequency and UNTIL date the API exposes for a component."""
+    rule = component.get("RRULE")
+    if not rule:
+        return "none", ""
+    frequency = _first(rule.get("FREQ"))
+    until = _first(rule.get("UNTIL"))
+    return (
+        str(frequency).lower() if frequency else "none",
+        until.isoformat()[:10] if until else "",
+    )
+
+
+def until_value(value, all_day):
+    """RFC 5545 3.3.10: UNTIL is a DATE for all-day events, UTC for timed ones."""
+    day = date.fromisoformat(value[:10])
+    if all_day:
+        return day
+    return datetime.combine(day, time(23, 59, 59), tzinfo=SERVER_TIMEZONE).astimezone(timezone.utc)
 
 
 def event_json(component):
     start = component.decoded("DTSTART")
     end = component.decoded("DTEND") if component.get("DTEND") else None
-    rule = component.get("RRULE")
-    frequency = str(rule.get("FREQ", "none")).lower() if rule else "none"
-    until = rule.get("UNTIL") if rule else None
-    until = until.isoformat()[:10] if until else ""
-    recurring = bool(rule or component.get("RECURRENCE-ID"))
+    frequency, until = recurrence_values(component)
+    recurring = bool(component.get("RRULE") or component.get("RECURRENCE-ID"))
     return {
         "id": event_id(component),
         "seriesId": uid(component),
@@ -111,27 +208,90 @@ def event_json(component):
         "frequency": frequency,
         "until": until,
         "title": str(component.get("SUMMARY", "")),
+        "location": str(component.get("LOCATION", "")),
         "start": start.isoformat(),
         "end": end.isoformat() if end else None,
-        "allDay": isinstance(start, date) and not isinstance(start, datetime),
+        "allDay": is_all_day(component),
     }
 
 
-def add_recurrence(item, frequency, until):
-    if frequency and frequency != "none":
-        rule = {"FREQ": frequency.upper()}
+def parse_frequency(value):
+    """Validate the repeat dropdown's value, treating an empty string as 'none'."""
+    if value in (None, "", "none"):
+        return None if value is None else "none"
+    if value not in FREQUENCIES:
+        raise ValueError(f"Unsupported repeat frequency: {value}")
+    return value
+
+
+def set_recurrence(item, frequency=None, until=None, until_provided=False):
+    """Apply only the recurrence fields the request actually carried.
+
+    The calendar list is expanded, so occurrences arrive without an RRULE and
+    the client sends this data back only after reading it from the master.
+    Rebuilding the rule unconditionally would drop BYDAY/COUNT and can turn a
+    finite series into an infinite one.
+    """
+    rule = item.get("RRULE")
+    current_frequency = recurrence_values(item)[0]
+    if frequency is not None:
+        if frequency == "none":
+            if rule is not None:
+                del item["RRULE"]
+            return
+        if rule is None or current_frequency != frequency:
+            old_count = _first(rule.get("COUNT")) if rule else None
+            old_interval = _first(rule.get("INTERVAL")) if rule else None
+            old_until = _first(rule.get("UNTIL")) if rule else None
+            if rule is not None:
+                del item["RRULE"]
+            new_rule = {"FREQ": frequency.upper()}
+            if old_interval is not None:
+                new_rule["INTERVAL"] = old_interval
+            if until_provided and until:
+                # RFC 5545 3.3.10: COUNT and UNTIL must not both appear.
+                new_rule["UNTIL"] = until_value(until, is_all_day(item))
+            else:
+                if old_count is not None:
+                    new_rule["COUNT"] = old_count
+                elif not until_provided and old_until is not None:
+                    new_rule["UNTIL"] = old_until
+            item.add("RRULE", new_rule)
+            return
+    if rule is not None and until_provided:
         if until:
-            rule["UNTIL"] = parse_date(until)
-        item.add("RRULE", rule)
+            rule.pop("COUNT", None)
+            rule["UNTIL"] = until_value(until, is_all_day(item))
+        else:
+            rule.pop("UNTIL", None)
+        item["RRULE"] = rule
+
+
+def set_property(item, name, value):
+    """Rewrite a property in place.
+
+    Assigning straight into an existing property keeps its old parameters and never
+    re-serialises to iCalendar basic format -- a datetime assigned onto a DTSTART that
+    still carries VALUE=DATE emits `DTSTART:2026-10-22 00:00:00+01:00`, which CalDAV
+    servers reject. Dropping the property first lets icalendar re-derive the type.
+    """
+    if name in item:
+        del item[name]
+    if value is not None:
+        item.add(name, value)
 
 
 def update_values(item, data):
-    item["SUMMARY"] = data["title"]
-    item["DTSTART"] = parse_date(data["start"])
+    all_day = bool(data.get("allDay"))
+    set_property(item, "SUMMARY", data.get("title", ""))
+    set_property(item, "LOCATION", data.get("location") or None)
+    set_property(item, "DTSTART", parse_date(data["start"], all_day))
     if data.get("end"):
-        item["DTEND"] = parse_date(data["end"])
-    elif "DTEND" in item:
-        del item["DTEND"]
+        set_property(item, "DTEND", parse_date(data["end"], all_day))
+        # RFC 5545 3.6.3: DTEND and DURATION must not both appear.
+        set_property(item, "DURATION", None)
+    else:
+        set_property(item, "DTEND", None)
 
 
 @app.get("/")
@@ -159,17 +319,39 @@ def get_events():
         return jsonify(error=str(error)), 500
 
 
+@app.get("/api/series/<path:series_id>")
+def get_series(series_id):
+    try:
+        resource, cal, series_id = find_series(calendar(), series_id)
+        if resource is None:
+            return jsonify(error="Event not found"), 404
+        master = find_component(cal, series_id)
+        if master is None:
+            return jsonify(error="Event not found"), 404
+        return jsonify(event_json(master))
+    except Exception as error:
+        logger.exception("Could not load event series")
+        return jsonify(error=str(error)), 500
+
+
 @app.post("/api/events")
 def create_event():
     try:
         data = request.json or {}
+        try:
+            frequency = parse_frequency(data.get("frequency"))
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
         item = Event()
         item.add("UID", data.get("id") or str(uuid4()))
         item.add("SUMMARY", data["title"])
-        item.add("DTSTART", parse_date(data["start"]))
+        if data.get("location"):
+            item.add("LOCATION", data["location"])
+        all_day = bool(data.get("allDay"))
+        item.add("DTSTART", parse_date(data["start"], all_day))
         if data.get("end"):
-            item.add("DTEND", parse_date(data["end"]))
-        add_recurrence(item, data.get("frequency"), data.get("until"))
+            item.add("DTEND", parse_date(data["end"], all_day))
+        set_recurrence(item, frequency, data.get("until"), "until" in data)
         item.add("DTSTAMP", datetime.now(timezone.utc))
         cal = Calendar()
         cal.add_component(item)
@@ -184,25 +366,35 @@ def create_event():
 def update_event(event_id):
     try:
         data = request.json or {}
+        try:
+            frequency = parse_frequency(data["frequency"]) if "frequency" in data else None
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
         resource, cal, series_id = find_series(calendar(), event_id)
         if not resource:
             return jsonify(error="Event not found"), 404
         target = find_component(cal, event_id)
         scope = data.get("scope", "series")
         if "|" in event_id and scope == "occurrence":
+            master = find_component(cal, series_id)
+            # RFC 5545 3.8.4.4: DTSTART's value type must not change across an override.
+            # Checked whether the override already exists or is being created.
+            if master is not None and bool(data.get("allDay")) != is_all_day(master):
+                return jsonify(error="An occurrence cannot change between all-day and timed"), 400
             if target is None:
                 target = Event()
                 target.add("UID", series_id)
                 target.add("RECURRENCE-ID", parse_date(data["recurrenceId"]))
+                target.add("DTSTAMP", datetime.now(timezone.utc))
                 cal.add_component(target)
             update_values(target, data)
         else:
             target = find_component(cal, series_id)
+            if target is None:
+                return jsonify(error="Event not found"), 404
             update_values(target, data)
-            if "frequency" in data:
-                if "RRULE" in target:
-                    del target["RRULE"]
-                add_recurrence(target, data.get("frequency"), data.get("until"))
+            if "frequency" in data or "until" in data:
+                set_recurrence(target, frequency, data.get("until"), "until" in data)
         add_server_timezone(cal)
         resource.data = cal.to_ical()
         resource.save()

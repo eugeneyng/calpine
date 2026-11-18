@@ -55,16 +55,16 @@ You can support the development of calpine [on Ko-Fi](https://ko-fi.com/eugeneng
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/eugeneyng/alpen.svg
-[contributors-url]: https://github.com/eugeneyng/alpen/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/eugeneyng/alpen.svg
-[forks-url]: https://github.com/eugeneyng/alpen/network/members
-[stars-shield]: https://img.shields.io/github/stars/eugeneyng/alpen.svg
-[stars-url]: https://github.com/eugeneyng/alpen/stargazers
-[issues-shield]: https://img.shields.io/github/issues/eugeneyng/alpen.svg
-[issues-url]: https://github.com/eugeneyng/alpen/issues
-[license-shield]: https://img.shields.io/github/license/eugeneyng/alpen.svg
-[license-url]: https://github.com/eugeneyng/alpen/blob/master/LICENSE
+[contributors-shield]: https://img.shields.io/github/contributors/eugeneyng/calpine.svg
+[contributors-url]: https://github.com/eugeneyng/calpine/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/eugeneyng/calpine.svg
+[forks-url]: https://github.com/eugeneyng/calpine/network/members
+[stars-shield]: https://img.shields.io/github/stars/eugeneyng/calpine.svg
+[stars-url]: https://github.com/eugeneyng/calpine/stargazers
+[issues-shield]: https://img.shields.io/github/issues/eugeneyng/calpine.svg
+[issues-url]: https://github.com/eugeneyng/calpine/issues
+[license-shield]: https://img.shields.io/github/license/eugeneyng/calpine.svg
+[license-url]: https://github.com/eugeneyng/calpine/blob/master/LICENSE
 <!-- Shields.io badges. You can a comprehensive list with many more badges at: https://github.com/inttter/md-badges -->
 [Alpine.js]: https://img.shields.io/badge/Alpine.js-8BC0D0?logo=alpinedotjs&logoColor=fff
 [Alpine-url]: https://alpinejs.dev/
