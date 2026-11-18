@@ -1,12 +1,21 @@
 services:
   calpine:
     build: .
+    container_name: calpine
     env_file:
       - .env
     environment:
       TZ: ${TZ:-UTC}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "5000:5000"
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    image: calpine
+    networks:
+      - default
+    # ports:
+    #   - "5000:5000"
     restart: unless-stopped
+
+networks:
+  default:
+    name: network
+    external: true
